@@ -1966,8 +1966,15 @@ function Invoke-CheckUpdateFlow {
     return
   }
 
-  if ($null -eq $result -or -not [string]::IsNullOrWhiteSpace([string]$result.error)) {
-    $detail = if ($null -eq $result) { "没有返回结果" } else { [string]$result.error }
+  $errorText = ""
+  if ($null -ne $result) {
+    $errorProperty = $result.PSObject.Properties["error"]
+    if ($null -ne $errorProperty) {
+      $errorText = [string]$errorProperty.Value
+    }
+  }
+  if ($null -eq $result -or -not [string]::IsNullOrWhiteSpace($errorText)) {
+    $detail = if ([string]::IsNullOrWhiteSpace($errorText)) { "没有返回结果" } else { $errorText }
     Show-Message -Text ("检查更新失败：`r`n" + (Protect-SensitiveText $detail)) -Title "检查更新"
     return
   }
@@ -4127,7 +4134,12 @@ function Show-Gui {
     })
 
   $updateCheckButton.Add_Click({
-      Invoke-CheckUpdateFlow
+      try {
+        Invoke-CheckUpdateFlow
+      }
+      catch {
+        Show-Message -Text $_.Exception.Message -Title "检查更新" -Owner $form
+      }
     })
 
   $applyTheme = {
