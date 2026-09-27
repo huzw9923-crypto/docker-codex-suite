@@ -1,0 +1,31 @@
+name: {{PROJECT_NAME}}
+
+services:
+  {{SERVICE_NAME}}:
+    build:
+      context: .
+      args:
+        SSH_PUBLIC_KEY: "{{SSH_PUBLIC_KEY}}"
+    image: local/docker-codex-suite:latest
+    container_name: {{CONTAINER_NAME}}
+    hostname: {{CONTAINER_NAME}}
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      CODEX_HOME: /home/codex/.codex
+      PATH: /home/codex/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+      DOCKER_CODEX_API_KEY: ${DOCKER_CODEX_API_KEY:-}
+    ports:
+      - "127.0.0.1:{{SSH_PORT}}:22"
+    volumes:
+      - type: bind
+        source: "{{WORKSPACE_PATH}}"
+        target: /workspace/Documents
+      - type: bind
+        source: ./codex-home
+        target: /home/codex/.codex
+      - type: tmpfs
+        target: /home/codex/.codex/app-server-control

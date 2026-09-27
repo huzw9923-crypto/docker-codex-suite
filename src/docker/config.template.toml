@@ -1,0 +1,18 @@
+model_provider = "custom"
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+approval_policy = "on-failure"
+sandbox_mode = "workspace-write"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+base_url = "https://api.openai.com/v1"
+env_key = "DOCKER_CODEX_API_KEY"
+
+[features]
+js_repl = false
+
+[sandbox_workspace_write]
+network_access = true
+

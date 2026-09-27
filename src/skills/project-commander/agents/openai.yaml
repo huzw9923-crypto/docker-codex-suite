@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Commander"
+  short_description: "Chat commands for Docker project commanders"
+  default_prompt: "Use $project-commander to handle /list, create a workspace-backed project with /new, or route work through its named commander."

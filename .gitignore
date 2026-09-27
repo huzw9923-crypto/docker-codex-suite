@@ -1,0 +1,12 @@
+_archive/
+build/
+test-installs/
+output/
+dist-fixed/
+migration/
+third_party/
+.trae/
+dist/*.exe
+dist/*.png
+dist/SHA256SUMS.txt
+dist/release-manifest.json
