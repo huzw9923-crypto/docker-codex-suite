@@ -24,7 +24,7 @@ using Microsoft.Win32;
 [assembly: AssemblyCopyright("Copyright (c) 2026 Docker Codex Suite contributors")]
 [assembly: AssemblyVersion("1.0.0.1")]
 [assembly: AssemblyFileVersion("1.0.0.1")]
-[assembly: AssemblyInformationalVersion("1.1.11")]
+[assembly: AssemblyInformationalVersion("1.2.0")]
 [assembly: ComVisible(false)]
 
 namespace DockerCodexSuiteInstaller
@@ -32,7 +32,7 @@ namespace DockerCodexSuiteInstaller
     internal static class Program
     {
         internal const string ProductName = "Docker Codex Suite";
-        internal const string ProductVersion = "1.1.11";
+        internal const string ProductVersion = "1.2.0";
 
         [STAThread]
         private static int Main(string[] args)
@@ -444,6 +444,11 @@ namespace DockerCodexSuiteInstaller
         internal static ContainerDetection ParseDockerMetadataForTesting(string metadata, string containerName)
         {
             return ParseDockerMetadata(metadata, containerName);
+        }
+
+        internal static bool ProbeDockerDaemonForTesting(string docker)
+        {
+            return ProbeDockerDaemon(docker);
         }
 
         internal static string RunDockerInspectForTesting(string executable, string containerName, out bool timedOut)
@@ -1250,6 +1255,655 @@ namespace DockerCodexSuiteInstaller
         private static void AddSource(List<string> sources, string source)
         {
             if (!sources.Contains(source)) sources.Add(source);
+        }
+    }
+
+    internal enum PrerequisiteState
+    {
+        Unknown,
+        Installed,
+        Missing,
+        Installing,
+        NeedsReboot,
+        Failed
+    }
+
+    internal sealed class PrerequisiteStatus
+    {
+        internal string Id = "";
+        internal string Name = "";
+        internal PrerequisiteState State;
+        internal string Detail = "";
+        internal bool RequiresReboot;
+    }
+
+    internal static class PrerequisiteDetector
+    {
+        internal static string ToolOverride(string variableName, string fallback)
+        {
+            string value = Environment.GetEnvironmentVariable(variableName);
+            if (!string.IsNullOrWhiteSpace(value) && File.Exists(value))
+            {
+                return Path.GetFullPath(value);
+            }
+            return fallback;
+        }
+
+        internal static string RunTool(
+            string executable,
+            string arguments,
+            int timeoutMilliseconds,
+            out int exitCode,
+            out bool timedOut)
+        {
+            exitCode = -1;
+            timedOut = false;
+            StringBuilder output = new StringBuilder();
+            object outputLock = new object();
+            try
+            {
+                ProcessStartInfo info = new ProcessStartInfo();
+                info.FileName = executable;
+                info.Arguments = arguments;
+                info.UseShellExecute = false;
+                info.CreateNoWindow = true;
+                info.RedirectStandardOutput = true;
+                info.RedirectStandardError = true;
+                info.StandardOutputEncoding = Encoding.UTF8;
+                info.StandardErrorEncoding = Encoding.UTF8;
+
+                using (Process process = new Process())
+                {
+                    process.StartInfo = info;
+                    process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs eventArgs)
+                    {
+                        if (eventArgs.Data == null) return;
+                        lock (outputLock) output.AppendLine(eventArgs.Data);
+                    };
+                    process.ErrorDataReceived += delegate { };
+                    process.Start();
+                    process.BeginOutputReadLine();
+                    process.BeginErrorReadLine();
+                    if (!process.WaitForExit(timeoutMilliseconds))
+                    {
+                        timedOut = true;
+                        try { process.Kill(); }
+                        catch { }
+                        return "";
+                    }
+                    process.WaitForExit();
+                    exitCode = process.ExitCode;
+                }
+            }
+            catch
+            {
+                return "";
+            }
+
+            lock (outputLock) return output.ToString();
+        }
+
+        internal static string ResolveWslExecutable()
+        {
+            return ToolOverride(
+                "DOCKER_CODEX_WSL_EXE",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "wsl.exe"));
+        }
+
+        internal static string ResolveSshExecutable()
+        {
+            return ToolOverride(
+                "DOCKER_CODEX_SSH_EXE",
+                Path.Combine(
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "OpenSSH"),
+                    "ssh.exe"));
+        }
+
+        internal static string FindNodeExecutable()
+        {
+            string overridePath = Environment.GetEnvironmentVariable("DOCKER_CODEX_NODE_EXE");
+            if (!string.IsNullOrWhiteSpace(overridePath) && File.Exists(overridePath))
+            {
+                return Path.GetFullPath(overridePath);
+            }
+
+            string codexNode = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe");
+            if (File.Exists(codexNode)) return codexNode;
+
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string bundled = Path.Combine(programFiles, "nodejs", "node.exe");
+            if (File.Exists(bundled)) return bundled;
+
+            string path = Environment.GetEnvironmentVariable("PATH") ?? "";
+            foreach (string directory in path.Split(Path.PathSeparator))
+            {
+                try
+                {
+                    string candidate = Path.Combine(directory.Trim(), "node.exe");
+                    if (File.Exists(candidate)) return candidate;
+                }
+                catch
+                {
+                }
+            }
+            return "";
+        }
+
+        internal static bool WingetAvailable(out string version)
+        {
+            version = "";
+            string windir = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            string winget = ToolOverride("DOCKER_CODEX_WINGET_EXE", Path.Combine(windir, "winget.exe"));
+            if (!File.Exists(winget))
+            {
+                string appInstaller = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "Microsoft\\WindowsApps\\winget.exe");
+                if (!File.Exists(appInstaller)) return false;
+                winget = appInstaller;
+            }
+
+            int exitCode;
+            bool timedOut;
+            string output = RunTool(winget, "--version", 10000, out exitCode, out timedOut);
+            if (timedOut || exitCode != 0) return false;
+            version = (output ?? "").Trim();
+            return version.Length > 0;
+        }
+
+        internal static PrerequisiteStatus Status(string id, string name, bool installed, string detail)
+        {
+            return new PrerequisiteStatus
+            {
+                Id = id,
+                Name = name,
+                State = installed ? PrerequisiteState.Installed : PrerequisiteState.Missing,
+                Detail = detail,
+                RequiresReboot = false
+            };
+        }
+
+        internal static PrerequisiteStatus DetectWsl()
+        {
+            string wsl = ResolveWslExecutable();
+            if (!File.Exists(wsl))
+            {
+                return Status("wsl", "WSL2 + Ubuntu-24.04", false, "未检测到 wsl.exe，需要通过 Windows 功能启用");
+            }
+
+            int exitCode;
+            bool timedOut;
+            string output = RunTool(wsl, "-l -v", 8000, out exitCode, out timedOut);
+            if (timedOut || exitCode != 0)
+            {
+                return Status("wsl", "WSL2 + Ubuntu-24.04", false, "已安装 WSL，但还没有可用的 Ubuntu-24.04 发行版");
+            }
+
+            bool hasDistro = false;
+            bool version2 = false;
+            string[] lines = (output ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string line in lines)
+            {
+                if (line.IndexOf("Ubuntu-24.04", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    hasDistro = true;
+                    string trimmed = line.Trim();
+                    if (trimmed.EndsWith("2", StringComparison.Ordinal)) version2 = true;
+                    break;
+                }
+            }
+
+            if (hasDistro && version2)
+            {
+                return Status("wsl", "WSL2 + Ubuntu-24.04", true, "WSL2 与 Ubuntu-24.04 已就绪");
+            }
+            if (hasDistro)
+            {
+                return Status("wsl", "WSL2 + Ubuntu-24.04", false, "Ubuntu-24.04 已安装，但未运行在 WSL2 上");
+            }
+            return Status("wsl", "WSL2 + Ubuntu-24.04", false, "已安装 WSL，但还没有可用的 Ubuntu-24.04 发行版");
+        }
+
+        internal static PrerequisiteStatus DetectDocker()
+        {
+            string docker = EnvironmentDetector.DockerExecutableForInstall();
+            if (string.IsNullOrEmpty(docker))
+            {
+                return Status("docker", "Docker Desktop", false, "未检测到 Docker Desktop");
+            }
+
+            bool daemonAvailable = EnvironmentDetector.ProbeDockerDaemonForTesting(docker);
+            return Status(
+                "docker",
+                "Docker Desktop",
+                true,
+                daemonAvailable ? "Docker Desktop 与 Docker daemon 已就绪" : "Docker Desktop 已安装；daemon 尚未运行");
+        }
+
+        internal static PrerequisiteStatus DetectNode()
+        {
+            string node = FindNodeExecutable();
+            if (string.IsNullOrEmpty(node))
+            {
+                return Status("node", "Node.js LTS", false, "未检测到 Node.js");
+            }
+
+            int exitCode;
+            bool timedOut;
+            string output = RunTool(node, "--version", 10000, out exitCode, out timedOut);
+            string version = (output ?? "").Trim().TrimStart('v');
+            int major = 0;
+            int dot = version.IndexOf('.');
+            if (dot > 0 && int.TryParse(version.Substring(0, dot), out major) && major >= 20)
+            {
+                return Status("node", "Node.js LTS", true, "Node.js v" + version + " 已就绪");
+            }
+            return Status("node", "Node.js LTS", false, "检测到 Node.js，但版本过低（需要 20+）：" + version);
+        }
+
+        internal static PrerequisiteStatus DetectOpenSsh()
+        {
+            string ssh = ResolveSshExecutable();
+            if (File.Exists(ssh))
+            {
+                return Status("openssh", "OpenSSH Client", true, "Windows OpenSSH Client 已就绪");
+            }
+            return Status("openssh", "OpenSSH Client", false, "未检测到 OpenSSH Client");
+        }
+
+        internal static PrerequisiteStatus DetectCodex()
+        {
+            string overrideRoot = Environment.GetEnvironmentVariable("DOCKER_CODEX_CODEX_ROOT");
+            string localAppData = string.IsNullOrWhiteSpace(overrideRoot)
+                ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+                : Path.GetFullPath(overrideRoot);
+
+            string direct = Path.Combine(localAppData, "Programs", "codex", "codex.exe");
+            if (File.Exists(direct))
+            {
+                return Status("codex", "Codex Desktop", true, "Codex Desktop 已安装");
+            }
+
+            string packages = Path.Combine(localAppData, "Packages");
+            try
+            {
+                if (Directory.Exists(packages))
+                {
+                    foreach (string directory in Directory.GetDirectories(packages))
+                    {
+                        string entry = Path.GetFileName(directory) ?? "";
+                        if (entry.StartsWith("OpenAI.Codex_", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return Status("codex", "Codex Desktop", true, "Codex Desktop 已安装");
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return Status("codex", "Codex Desktop", false, "未检测到 Codex Desktop");
+        }
+
+        internal static List<PrerequisiteStatus> DetectAll()
+        {
+            List<PrerequisiteStatus> statuses = new List<PrerequisiteStatus>();
+            statuses.Add(DetectWsl());
+            statuses.Add(DetectDocker());
+            statuses.Add(DetectNode());
+            statuses.Add(DetectOpenSsh());
+            statuses.Add(DetectCodex());
+            return statuses;
+        }
+    }
+
+    internal delegate void PrerequisiteProgress(string id, string message, int percent);
+
+    internal static class PrerequisiteInstaller
+    {
+        private const string DockerDesktopInstallerUrl =
+            "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe";
+        private const string NodeMsiUrl = "https://nodejs.org/dist/v20.19.2/node-v20.19.2-x64.msi";
+
+        private static void Report(PrerequisiteProgress progress, string id, string message, int percent)
+        {
+            if (progress != null) progress(id, message, percent);
+        }
+
+        private static string ResolveWingetPath()
+        {
+            string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            string overridePath = Environment.GetEnvironmentVariable("DOCKER_CODEX_WINGET_EXE");
+            if (!string.IsNullOrWhiteSpace(overridePath) && File.Exists(overridePath))
+            {
+                return Path.GetFullPath(overridePath);
+            }
+            string direct = Path.Combine(system, "winget.exe");
+            if (File.Exists(direct)) return direct;
+            string appInstaller = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Microsoft\\WindowsApps\\winget.exe");
+            return File.Exists(appInstaller) ? appInstaller : "";
+        }
+
+        private static bool RunWinget(
+            string installArguments,
+            int timeoutMilliseconds,
+            out string output)
+        {
+            output = "";
+            string overridePath = Environment.GetEnvironmentVariable("DOCKER_CODEX_WINGET_EXE");
+            int exitCode;
+            bool timedOut;
+            if (!string.IsNullOrWhiteSpace(overridePath))
+            {
+                output = PrerequisiteDetector.RunTool(
+                    Path.GetFullPath(overridePath),
+                    "install " + installArguments,
+                    timeoutMilliseconds,
+                    out exitCode,
+                    out timedOut);
+            }
+            else
+            {
+                string winget = ResolveWingetPath();
+                if (winget.Length == 0) return false;
+                output = PrerequisiteDetector.RunTool(
+                    "cmd.exe",
+                    "/c winget install " + installArguments,
+                    timeoutMilliseconds,
+                    out exitCode,
+                    out timedOut);
+            }
+            return !timedOut && exitCode == 0;
+        }
+
+        private static bool TryWingetInstall(
+            string packageId,
+            string id,
+            PrerequisiteProgress progress,
+            out bool wingetAttempted)
+        {
+            wingetAttempted = false;
+            string wingetVersion = "";
+            if (!PrerequisiteDetector.WingetAvailable(out wingetVersion)) return false;
+
+            wingetAttempted = true;
+            Report(progress, id, "正在用 winget 安装 " + packageId + " ...", 10);
+            string output;
+            bool ok = RunWinget(
+                "--id " + packageId +
+                " --silent --accept-package-agreements --accept-source-agreements --disable-interactivity",
+                1800000,
+                out output);
+            if (!ok)
+            {
+                Report(progress, id, "winget 安装未成功，切换官方安装包回退...", 40);
+            }
+            return ok;
+        }
+
+        private static bool DownloadHttp(string url, string destination, string id, PrerequisiteProgress progress)
+        {
+            try
+            {
+                Report(progress, id, "正在下载 " + Path.GetFileName(destination) + " ...", 30);
+                using (System.Net.WebClient client = new System.Net.WebClient())
+                {
+                    client.DownloadFile(url, destination);
+                }
+                Report(progress, id, "下载完成", 55);
+                return File.Exists(destination);
+            }
+            catch (Exception exception)
+            {
+                Report(progress, id, "下载失败：" + exception.Message, 0);
+                return false;
+            }
+        }
+
+        private static PrerequisiteStatus FailedStatus(PrerequisiteStatus item, string detail)
+        {
+            item.State = PrerequisiteState.Failed;
+            item.Detail = detail;
+            return item;
+        }
+
+        private static PrerequisiteStatus InstallWsl(PrerequisiteStatus item, PrerequisiteProgress progress)
+        {
+            string wsl = PrerequisiteDetector.ResolveWslExecutable();
+            if (!File.Exists(wsl))
+            {
+                Report(progress, item.Id, "启用 WSL 与虚拟机平台功能...", 30);
+                int exitCode;
+                bool timedOut;
+                PrerequisiteDetector.RunTool(
+                    "dism.exe",
+                    "/online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart",
+                    300000,
+                    out exitCode,
+                    out timedOut);
+                PrerequisiteDetector.RunTool(
+                    "dism.exe",
+                    "/online /enable-feature /featurename:VirtualMachinePlatform /all /norestart",
+                    300000,
+                    out exitCode,
+                    out timedOut);
+                item.State = PrerequisiteState.NeedsReboot;
+                item.RequiresReboot = true;
+                item.Detail = "已启用 WSL 功能；重启电脑后重新运行安装器继续";
+                return item;
+            }
+
+            Report(progress, item.Id, "正在安装 WSL2 与 Ubuntu-24.04（可能需要较长时间）...", 30);
+            int installCode;
+            bool installTimedOut;
+            PrerequisiteDetector.RunTool(
+                wsl,
+                "--install -d Ubuntu-24.04 --no-launch",
+                1800000,
+                out installCode,
+                out installTimedOut);
+
+            PrerequisiteStatus refreshed = PrerequisiteDetector.DetectWsl();
+            if (refreshed.State == PrerequisiteState.Installed)
+            {
+                Report(progress, item.Id, "WSL2 与 Ubuntu-24.04 已就绪", 100);
+                return refreshed;
+            }
+
+            item.State = PrerequisiteState.NeedsReboot;
+            item.RequiresReboot = true;
+            item.Detail = "WSL 组件已安装；重启电脑后重新运行安装器继续";
+            Report(progress, item.Id, item.Detail, 80);
+            return item;
+        }
+
+        private static PrerequisiteStatus InstallDocker(PrerequisiteStatus item, PrerequisiteProgress progress)
+        {
+            bool wingetAttempted;
+            bool wingetOk = TryWingetInstall("Docker.DockerDesktop", item.Id, progress, out wingetAttempted);
+
+            if (!wingetOk)
+            {
+                string installer = Path.Combine(Path.GetTempPath(), "Docker Desktop Installer.exe");
+                if (!wingetAttempted || !File.Exists(installer))
+                {
+                    if (!DownloadHttp(DockerDesktopInstallerUrl, installer, item.Id, progress))
+                    {
+                        return FailedStatus(item, "Docker Desktop 安装包下载失败，请检查网络后重试");
+                    }
+                }
+                Report(progress, item.Id, "正在静默安装 Docker Desktop ...", 60);
+                int exitCode;
+                bool timedOut;
+                PrerequisiteDetector.RunTool(
+                    installer,
+                    "install --quiet --accept-license",
+                    1800000,
+                    out exitCode,
+                    out timedOut);
+                if (timedOut || exitCode != 0)
+                {
+                    return FailedStatus(item, "Docker Desktop 安装未完成（退出码 " + exitCode + "）");
+                }
+            }
+
+            PrerequisiteStatus refreshed = PrerequisiteDetector.DetectDocker();
+            if (refreshed.State != PrerequisiteState.Installed)
+            {
+                return FailedStatus(item, "Docker Desktop 安装后仍未检测到，请重试");
+            }
+            if (refreshed.Detail.IndexOf("daemon 尚未运行", StringComparison.Ordinal) >= 0)
+            {
+                refreshed.State = PrerequisiteState.NeedsReboot;
+                refreshed.RequiresReboot = true;
+                refreshed.Detail = "Docker Desktop 已安装；注销或重启后重新运行安装器继续";
+            }
+            Report(progress, item.Id, refreshed.Detail, 100);
+            return refreshed;
+        }
+
+        private static PrerequisiteStatus InstallNode(PrerequisiteStatus item, PrerequisiteProgress progress)
+        {
+            bool wingetAttempted;
+            bool wingetOk = TryWingetInstall("OpenJS.NodeJS.LTS", item.Id, progress, out wingetAttempted);
+
+            if (!wingetOk)
+            {
+                string msi = Path.Combine(Path.GetTempPath(), "node-lts-x64.msi");
+                if (!DownloadHttp(NodeMsiUrl, msi, item.Id, progress))
+                {
+                    return FailedStatus(item, "Node.js 安装包下载失败，请检查网络后重试");
+                }
+                Report(progress, item.Id, "正在静默安装 Node.js LTS ...", 60);
+                int exitCode;
+                bool timedOut;
+                PrerequisiteDetector.RunTool(
+                    "msiexec.exe",
+                    "/i \"" + msi + "\" /qn",
+                    900000,
+                    out exitCode,
+                    out timedOut);
+                if (timedOut || exitCode != 0)
+                {
+                    return FailedStatus(item, "Node.js 安装未完成（退出码 " + exitCode + "）");
+                }
+            }
+
+            PrerequisiteStatus refreshed = PrerequisiteDetector.DetectNode();
+            if (refreshed.State != PrerequisiteState.Installed)
+            {
+                return FailedStatus(item, "Node.js 安装后仍未检测到，请重试");
+            }
+            Report(progress, item.Id, refreshed.Detail, 100);
+            return refreshed;
+        }
+
+        private static PrerequisiteStatus InstallOpenSsh(PrerequisiteStatus item, PrerequisiteProgress progress)
+        {
+            bool wingetAttempted;
+            bool wingetOk = TryWingetInstall("Microsoft.OpenSSH.Client", item.Id, progress, out wingetAttempted);
+
+            if (!wingetOk)
+            {
+                Report(progress, item.Id, "通过 dism 启用 OpenSSH Client 功能...", 60);
+                int exitCode;
+                bool timedOut;
+                PrerequisiteDetector.RunTool(
+                    "dism.exe",
+                    "/online /add-capability /capabilityname:OpenSSH.Client~~~~0.0.1.0 /norestart",
+                    600000,
+                    out exitCode,
+                    out timedOut);
+                if (timedOut || exitCode != 0)
+                {
+                    return FailedStatus(item, "OpenSSH Client 功能启用失败（退出码 " + exitCode + "）");
+                }
+            }
+
+            PrerequisiteStatus refreshed = PrerequisiteDetector.DetectOpenSsh();
+            if (refreshed.State != PrerequisiteState.Installed)
+            {
+                return FailedStatus(item, "OpenSSH Client 安装后仍未检测到，请重试");
+            }
+            Report(progress, item.Id, refreshed.Detail, 100);
+            return refreshed;
+        }
+
+        private static PrerequisiteStatus GuideCodexDesktop(PrerequisiteStatus item, PrerequisiteProgress progress)
+        {
+            Report(progress, item.Id, "正在打开 Codex Desktop 官方下载页...", 30);
+            try
+            {
+                Process.Start("https://chatgpt.com/codex");
+            }
+            catch
+            {
+                return FailedStatus(item, "无法打开浏览器，请手动访问 https://chatgpt.com/codex 下载");
+            }
+            item.State = PrerequisiteState.Missing;
+            item.Detail = "已打开官方下载页；安装并登录后点击“重新检测”继续";
+            Report(progress, item.Id, item.Detail, 100);
+            return item;
+        }
+
+        internal static PrerequisiteStatus InstallOne(PrerequisiteStatus item, PrerequisiteProgress progress)
+        {
+            if (item == null || string.IsNullOrEmpty(item.Id))
+            {
+                throw new ArgumentException("Prerequisite status is invalid.");
+            }
+            if (item.State == PrerequisiteState.Installed)
+            {
+                Report(progress, item.Id, "已安装，跳过", 100);
+                return item;
+            }
+
+            item.State = PrerequisiteState.Installing;
+            Report(progress, item.Id, "开始安装 " + item.Name + " ...", 5);
+            try
+            {
+                switch (item.Id)
+                {
+                    case "wsl":
+                        return InstallWsl(item, progress);
+                    case "docker":
+                        return InstallDocker(item, progress);
+                    case "node":
+                        return InstallNode(item, progress);
+                    case "openssh":
+                        return InstallOpenSsh(item, progress);
+                    case "codex":
+                        return GuideCodexDesktop(item, progress);
+                    default:
+                        return FailedStatus(item, "未知组件：" + item.Id);
+                }
+            }
+            catch (Exception exception)
+            {
+                return FailedStatus(item, "安装失败：" + exception.Message);
+            }
+        }
+
+        internal static List<PrerequisiteStatus> InstallAll(
+            List<PrerequisiteStatus> items,
+            PrerequisiteProgress progress)
+        {
+            List<PrerequisiteStatus> results = new List<PrerequisiteStatus>();
+            foreach (PrerequisiteStatus item in items)
+            {
+                if (item.State == PrerequisiteState.Installed)
+                {
+                    results.Add(item);
+                    continue;
+                }
+                results.Add(InstallOne(item, progress));
+            }
+            return results;
         }
     }
 
@@ -3267,6 +3921,10 @@ namespace DockerCodexSuiteInstaller
         private readonly ProgressBar progress;
         private readonly RichTextBox logBox;
         private readonly List<Button> secondaryButtons = new List<Button>();
+        private readonly List<PrerequisiteStatus> prereqStatuses = new List<PrerequisiteStatus>();
+        private readonly Dictionary<string, Label> prereqStateLabels = new Dictionary<string, Label>();
+        private readonly Dictionary<string, Button> prereqFixButtons = new Dictionary<string, Button>();
+        private bool prereqRebootNoticeShown;
         private InstallOptions detectedOptions;
         private CodexPalette palette;
 
@@ -3274,8 +3932,8 @@ namespace DockerCodexSuiteInstaller
         {
             Text = Program.ProductName + " 安装程序";
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(860, 780);
-            MinimumSize = new Size(800, 700);
+            ClientSize = new Size(860, 900);
+            MinimumSize = new Size(800, 780);
             AutoScaleMode = AutoScaleMode.Dpi;
             Font = CodexTheme.Font(9F, FontStyle.Regular);
             DoubleBuffered = true;
@@ -3285,9 +3943,10 @@ namespace DockerCodexSuiteInstaller
             root.Dock = DockStyle.Fill;
             root.Padding = new Padding(28, 18, 28, 18);
             root.ColumnCount = 1;
-            root.RowCount = 7;
+            root.RowCount = 8;
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72F));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 194F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58F));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 108F));
@@ -3315,10 +3974,16 @@ namespace DockerCodexSuiteInstaller
             subtitleLabel.Location = new Point(2, 42);
             header.Controls.Add(subtitleLabel);
 
+            Panel prereqPanel = new Panel();
+            prereqPanel.Dock = DockStyle.Fill;
+            prereqPanel.Margin = new Padding(0, 0, 0, 4);
+            root.Controls.Add(prereqPanel, 0, 1);
+            BuildPrerequisitePanel(prereqPanel);
+
             Panel pathPanel = new Panel();
             pathPanel.Dock = DockStyle.Fill;
             pathPanel.Margin = new Padding(0);
-            root.Controls.Add(pathPanel, 0, 1);
+            root.Controls.Add(pathPanel, 0, 2);
 
             InstallOptions defaults = InstallOptions.Defaults();
             installDirText = AddPathRow(pathPanel, "控制器安装目录", defaults.InstallDir, 0, BrowseFolder);
@@ -3328,7 +3993,7 @@ namespace DockerCodexSuiteInstaller
             detectionPanel = new Panel();
             detectionPanel.Dock = DockStyle.Fill;
             detectionPanel.Margin = new Padding(0, 3, 0, 7);
-            root.Controls.Add(detectionPanel, 0, 2);
+            root.Controls.Add(detectionPanel, 0, 3);
 
             detectionLabel = new Label();
             detectionLabel.Location = new Point(12, 8);
@@ -3349,7 +4014,7 @@ namespace DockerCodexSuiteInstaller
             Panel optionsPanel = new Panel();
             optionsPanel.Dock = DockStyle.Fill;
             optionsPanel.Margin = new Padding(0);
-            root.Controls.Add(optionsPanel, 0, 3);
+            root.Controls.Add(optionsPanel, 0, 4);
 
             AddLabel(optionsPanel, "本机 SSH 端口", 0, 8);
             portInput = new NumericUpDown();
@@ -3385,7 +4050,7 @@ namespace DockerCodexSuiteInstaller
             warningPanel.Dock = DockStyle.Fill;
             warningPanel.Margin = new Padding(0, 0, 0, 8);
             warningPanel.Padding = new Padding(12, 8, 12, 8);
-            root.Controls.Add(warningPanel, 0, 4);
+            root.Controls.Add(warningPanel, 0, 5);
 
             warningLabel = new Label();
             warningLabel.Text = "安全提示：SSH 仅绑定 127.0.0.1；容器拥有 SYS_ADMIN 且可读写所选工作区。安装包不包含任何 API Key 或 auth.json。";
@@ -3397,7 +4062,7 @@ namespace DockerCodexSuiteInstaller
             Panel logSection = new Panel();
             logSection.Dock = DockStyle.Fill;
             logSection.Margin = new Padding(0);
-            root.Controls.Add(logSection, 0, 5);
+            root.Controls.Add(logSection, 0, 6);
 
             Label logLabel = new Label();
             logLabel.Text = "安装日志";
@@ -3424,7 +4089,7 @@ namespace DockerCodexSuiteInstaller
             Panel footer = new Panel();
             footer.Dock = DockStyle.Fill;
             footer.Margin = new Padding(0);
-            root.Controls.Add(footer, 0, 6);
+            root.Controls.Add(footer, 0, 7);
 
             progress = new ProgressBar();
             progress.Location = new Point(0, 17);
@@ -3444,6 +4109,7 @@ namespace DockerCodexSuiteInstaller
 
             ApplyDetectedOptions(defaults);
             ApplyTheme();
+            RefreshPrerequisites();
         }
 
         private Label AddLabel(Control parent, string text, int left, int top)
@@ -3488,6 +4154,232 @@ namespace DockerCodexSuiteInstaller
                 dialog.ShowNewFolderButton = true;
                 if (dialog.ShowDialog(this) == DialogResult.OK) target.Text = dialog.SelectedPath;
             }
+        }
+
+        private static readonly string[] PrereqIds = { "wsl", "docker", "node", "openssh", "codex" };
+
+        private void BuildPrerequisitePanel(Panel panel)
+        {
+            TableLayoutPanel table = new TableLayoutPanel();
+            table.Dock = DockStyle.Fill;
+            table.Margin = new Padding(0);
+            table.ColumnCount = 3;
+            table.RowCount = 5;
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170F));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110F));
+            for (int row = 0; row < 5; row += 1)
+            {
+                table.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F));
+                string id = PrereqIds[row];
+
+                Label name = new Label();
+                name.Text = PrerequisiteDisplayName(id);
+                name.Dock = DockStyle.Fill;
+                name.TextAlign = ContentAlignment.MiddleLeft;
+                name.Font = CodexTheme.Font(9F, FontStyle.Bold);
+                table.Controls.Add(name, 0, row);
+
+                Label state = new Label();
+                state.Text = "正在检测...";
+                state.Dock = DockStyle.Fill;
+                state.TextAlign = ContentAlignment.MiddleLeft;
+                state.AutoEllipsis = true;
+                state.ForeColor = palette.Muted;
+                table.Controls.Add(state, 1, row);
+                prereqStateLabels[id] = state;
+
+                Button fix = new CodexButton();
+                fix.Text = "检测中";
+                fix.Dock = DockStyle.Fill;
+                fix.Enabled = false;
+                fix.TabStop = false;
+                fix.Tag = id;
+                fix.Click += FixPrerequisiteButtonClick;
+                table.Controls.Add(fix, 2, row);
+                prereqFixButtons[id] = fix;
+            }
+            panel.Controls.Add(table);
+        }
+
+        private static string PrerequisiteDisplayName(string id)
+        {
+            switch (id)
+            {
+                case "wsl": return "WSL2 + Ubuntu";
+                case "docker": return "Docker Desktop";
+                case "node": return "Node.js LTS";
+                case "openssh": return "OpenSSH Client";
+                case "codex": return "Codex Desktop";
+                default: return id;
+            }
+        }
+
+        private void RefreshPrerequisites()
+        {
+            BackgroundWorker worker = new BackgroundWorker();
+            worker.DoWork += delegate(object workerSender, DoWorkEventArgs workArgs)
+            {
+                workArgs.Result = PrerequisiteDetector.DetectAll();
+            };
+            worker.RunWorkerCompleted += delegate(object workerSender, RunWorkerCompletedEventArgs completeArgs)
+            {
+                if (completeArgs.Error != null)
+                {
+                    AppendLog("前置条件检测失败：" + completeArgs.Error.Message);
+                    return;
+                }
+                ApplyPrerequisiteStatuses((List<PrerequisiteStatus>)completeArgs.Result);
+            };
+            worker.RunWorkerAsync();
+        }
+
+        private void ApplyPrerequisiteStatuses(List<PrerequisiteStatus> statuses)
+        {
+            if (statuses == null) return;
+            prereqStatuses.Clear();
+            prereqStatuses.AddRange(statuses);
+            foreach (PrerequisiteStatus status in statuses)
+            {
+                ApplyPrerequisiteLine(status);
+            }
+        }
+
+        private void ApplyPrerequisiteLine(PrerequisiteStatus status)
+        {
+            Label stateLabel;
+            Button fixButton;
+            if (!prereqStateLabels.TryGetValue(status.Id, out stateLabel)) return;
+            prereqFixButtons.TryGetValue(status.Id, out fixButton);
+
+            switch (status.State)
+            {
+                case PrerequisiteState.Installed:
+                    stateLabel.Text = status.Detail;
+                    stateLabel.ForeColor = palette.Success;
+                    if (fixButton != null)
+                    {
+                        fixButton.Text = "已就绪";
+                        fixButton.Enabled = false;
+                    }
+                    break;
+                case PrerequisiteState.Missing:
+                    stateLabel.Text = status.Detail;
+                    stateLabel.ForeColor = palette.Muted;
+                    if (fixButton != null)
+                    {
+                        fixButton.Text = status.Id == "codex" ? "打开下载页" : "安装";
+                        fixButton.Enabled = true;
+                    }
+                    break;
+                case PrerequisiteState.NeedsReboot:
+                    stateLabel.Text = status.Detail;
+                    stateLabel.ForeColor = palette.Warning;
+                    if (fixButton != null)
+                    {
+                        fixButton.Text = "待重启";
+                        fixButton.Enabled = false;
+                    }
+                    MaybeShowRebootNotice(status);
+                    break;
+                case PrerequisiteState.Failed:
+                    stateLabel.Text = status.Detail;
+                    stateLabel.ForeColor = palette.Warning;
+                    if (fixButton != null)
+                    {
+                        fixButton.Text = "重试";
+                        fixButton.Enabled = true;
+                    }
+                    break;
+                default:
+                    stateLabel.Text = status.Detail;
+                    stateLabel.ForeColor = palette.Muted;
+                    break;
+            }
+        }
+
+        private void MaybeShowRebootNotice(PrerequisiteStatus status)
+        {
+            if (prereqRebootNoticeShown || !status.RequiresReboot) return;
+            prereqRebootNoticeShown = true;
+            MessageBox.Show(
+                this,
+                status.Name + " 安装后需要重启电脑。\n重启后请重新运行安装器：已完成的步骤会自动跳过。",
+                "需要重启",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+
+        private void FixPrerequisiteButtonClick(object sender, EventArgs eventArgs)
+        {
+            Button button = (Button)sender;
+            string id = button.Tag as string;
+            if (string.IsNullOrEmpty(id)) return;
+
+            PrerequisiteStatus item = null;
+            foreach (PrerequisiteStatus status in prereqStatuses)
+            {
+                if (status.Id == id)
+                {
+                    item = status;
+                    break;
+                }
+            }
+            if (item == null) return;
+
+            button.Enabled = false;
+            Label stateLabel;
+            if (prereqStateLabels.TryGetValue(id, out stateLabel))
+            {
+                stateLabel.Text = "安装中...";
+                stateLabel.ForeColor = palette.Muted;
+            }
+            progress.Visible = true;
+            progress.Style = ProgressBarStyle.Continuous;
+            progress.Value = 5;
+
+            BackgroundWorker worker = new BackgroundWorker();
+            worker.WorkerReportsProgress = true;
+            worker.DoWork += delegate(object workerSender, DoWorkEventArgs workArgs)
+            {
+                PrerequisiteStatus result = PrerequisiteInstaller.InstallOne(
+                    item,
+                    delegate(string progressId, string message, int percent)
+                    {
+                        worker.ReportProgress(Math.Max(0, Math.Min(100, percent)), message);
+                    });
+                workArgs.Result = result;
+            };
+            worker.ProgressChanged += delegate(object workerSender, ProgressChangedEventArgs changeArgs)
+            {
+                if (changeArgs.UserState != null && prereqStateLabels.ContainsKey(id))
+                {
+                    prereqStateLabels[id].Text = Convert.ToString(changeArgs.UserState);
+                }
+                progress.Value = changeArgs.ProgressPercentage;
+            };
+            worker.RunWorkerCompleted += delegate(object workerSender, RunWorkerCompletedEventArgs completeArgs)
+            {
+                progress.Visible = false;
+                string error = completeArgs.Error == null ? "" : completeArgs.Error.Message;
+                if (error.Length > 0)
+                {
+                    if (prereqStateLabels.ContainsKey(id))
+                    {
+                        prereqStateLabels[id].Text = "安装失败：" + error;
+                        prereqStateLabels[id].ForeColor = palette.Warning;
+                    }
+                    if (prereqFixButtons.ContainsKey(id)) prereqFixButtons[id].Enabled = true;
+                    AppendLog("前置条件安装失败：" + error);
+                    return;
+                }
+
+                PrerequisiteStatus result = (PrerequisiteStatus)completeArgs.Result;
+                ApplyPrerequisiteLine(result);
+                AppendLog("前置条件 " + result.Name + "：" + result.Detail);
+                RefreshPrerequisites();
+            };
+            worker.RunWorkerAsync();
         }
 
         private void RedetectButtonClick(object sender, EventArgs eventArgs)

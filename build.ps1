@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "1.1.11",
+  [string]$Version = "1.2.0",
   [switch]$SkipSmokeTest
 )
 
@@ -200,6 +200,12 @@ if (-not (Test-Path -LiteralPath $Csc)) {
 $installerVersionPattern = 'internal const string ProductVersion = "' + [regex]::Escape($Version) + '";'
 if (-not (Select-String -LiteralPath $InstallerSource -Pattern $installerVersionPattern -Quiet)) {
   throw "Installer ProductVersion does not match build version $Version."
+}
+if (-not (Select-String -LiteralPath $InstallerSource -Pattern "PrerequisiteInstaller" -Quiet)) {
+  throw "Installer source is missing the prerequisite auto-installer."
+}
+if (-not (Select-String -LiteralPath $AppManifest -Pattern "requireAdministrator" -Quiet)) {
+  throw "Installer manifest is missing the elevation requirement for prerequisite installation."
 }
 
 Write-Host "[1/8] Running Chat proxy regression tests..."

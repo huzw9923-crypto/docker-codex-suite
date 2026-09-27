@@ -1,3 +1,17 @@
+# Docker Codex Suite 1.2.0
+
+## 前置条件自动安装
+
+- 安装器新增"前置条件"面板，自动检测 WSL2 + Ubuntu-24.04、Docker Desktop、Node.js LTS、OpenSSH Client 与 Codex Desktop，缺什么装什么。
+- 安装手段：winget 静默安装优先；winget 不可用或失败时回退官方渠道（wsl --install、Docker Desktop 官方安装器、Node 官方 msi、dism 启用 OpenSSH 功能、Codex Desktop 官网下载引导）。
+- 安装器以管理员运行（一次 UAC），所有步骤幂等：重启后重新运行安装器会自动跳过已完成项。
+- 容器创建与容器内 Codex CLI 安装沿用既有流程，无需手动执行 Docker 命令。
+
+## 已知限制
+
+- WSL 内核与 Docker Desktop 首次安装后需要重启电脑并重跑安装器继续。
+- Codex Desktop 需要手动登录；提权模式不支持"标准用户 + 独立管理员账户"混合场景。
+
 # Docker Codex Suite 1.1.11
 
 ## 原生重启可靠性

@@ -27,6 +27,12 @@ namespace DockerCodexSuiteInstaller
                 return fakeDockerExitCode;
             }
 
+            int fakeToolExitCode;
+            if (TryRunFakeTool(args, out fakeToolExitCode))
+            {
+                return fakeToolExitCode;
+            }
+
             try
             {
                 string testRoot = args.Length > 0
@@ -47,10 +53,15 @@ namespace DockerCodexSuiteInstaller
                 TestCodexHomeResolution(Path.Combine(testRoot, "codex-home-resolution"));
                 TestInstallRegistration(Path.Combine(testRoot, "install-registration"));
                 TestManagedSkillInstallation(Path.Combine(testRoot, "managed-skill"));
+                TestPrerequisiteDetectAllInstalled(Path.Combine(testRoot, "prereq-installed"));
+                TestPrerequisiteDetectMissing();
+                TestWingetDetection();
+                TestPrerequisiteInstallOneSkipsInstalled();
 
                 if (args.Length >= 3)
                 {
                     TestCurrentMachine(args[1], args[2]);
+                    TestCurrentMachinePrerequisites();
                 }
 
                 Console.WriteLine("EnvironmentDetector tests passed.");
@@ -419,6 +430,184 @@ namespace DockerCodexSuiteInstaller
                 Environment.SetEnvironmentVariable("FAKE_DOCKER_CODEX_CONTAINERS", previousCodexContainers);
                 Environment.SetEnvironmentVariable("FAKE_DOCKER_LOG", previousLog);
                 Environment.SetEnvironmentVariable("FAKE_DOCKER_STATE_FILE", previousStateFile);
+            }
+        }
+
+        private static bool TryRunFakeTool(string[] args, out int exitCode)
+        {
+            exitCode = 0;
+            if (args.Length == 0) return false;
+            string first = args[0].ToLowerInvariant();
+
+            if (first == "-l")
+            {
+                if (Environment.GetEnvironmentVariable("FAKE_WSL_STATE") == "installed")
+                {
+                    Console.WriteLine("Windows Subsystem for Linux Distributions:");
+                    Console.WriteLine("Ubuntu-24.04    Running         2");
+                }
+                else
+                {
+                    exitCode = 1;
+                }
+                return true;
+            }
+
+            if (first == "--version")
+            {
+                string nodeOutput = Environment.GetEnvironmentVariable("FAKE_NODE_VERSION_OUTPUT");
+                if (nodeOutput != null)
+                {
+                    if (nodeOutput == "fail") exitCode = 1;
+                    else Console.WriteLine(nodeOutput);
+                }
+                else
+                {
+                    Console.WriteLine("v1.8.1911");
+                }
+                return true;
+            }
+
+            if (first == "install")
+            {
+                if (Environment.GetEnvironmentVariable("FAKE_WINGET_INSTALL_RESULT") == "fail") exitCode = 1;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static string SetTestEnv(string name, string value)
+        {
+            string previous = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+            return previous;
+        }
+
+        private static void TestPrerequisiteDetectAllInstalled(string root)
+        {
+            Directory.CreateDirectory(root);
+            string self = Assembly.GetExecutingAssembly().Location;
+            string codexRoot = Path.Combine(root, "codex-root");
+            Directory.CreateDirectory(Path.Combine(codexRoot, "Packages", "OpenAI.Codex_fakepkg"));
+
+            string prevWsl = SetTestEnv("DOCKER_CODEX_WSL_EXE", self);
+            string prevWslState = SetTestEnv("FAKE_WSL_STATE", "installed");
+            string prevNode = SetTestEnv("DOCKER_CODEX_NODE_EXE", self);
+            string prevNodeOut = SetTestEnv("FAKE_NODE_VERSION_OUTPUT", "v22.11.0");
+            string prevSsh = SetTestEnv("DOCKER_CODEX_SSH_EXE", self);
+            string prevDocker = SetTestEnv("DOCKER_CODEX_DOCKER_EXE", self);
+            string prevCodex = SetTestEnv("DOCKER_CODEX_CODEX_ROOT", codexRoot);
+            try
+            {
+                List<PrerequisiteStatus> statuses = PrerequisiteDetector.DetectAll();
+                AssertTrue(statuses.Count == 5, "prerequisite detect-all returns five entries");
+                foreach (PrerequisiteStatus status in statuses)
+                {
+                    AssertTrue(
+                        status.State == PrerequisiteState.Installed,
+                        "prerequisite installed: " + status.Id + " detail=" + status.Detail);
+                }
+            }
+            finally
+            {
+                SetTestEnv("DOCKER_CODEX_WSL_EXE", prevWsl);
+                SetTestEnv("FAKE_WSL_STATE", prevWslState);
+                SetTestEnv("DOCKER_CODEX_NODE_EXE", prevNode);
+                SetTestEnv("FAKE_NODE_VERSION_OUTPUT", prevNodeOut);
+                SetTestEnv("DOCKER_CODEX_SSH_EXE", prevSsh);
+                SetTestEnv("DOCKER_CODEX_DOCKER_EXE", prevDocker);
+                SetTestEnv("DOCKER_CODEX_CODEX_ROOT", prevCodex);
+            }
+        }
+
+        private static void TestPrerequisiteDetectMissing()
+        {
+            string missingWsl = Path.Combine(
+                Path.GetTempPath(),
+                "DockerCodexSuite-no-such-wsl-" + Guid.NewGuid().ToString("N") + ".exe");
+            string missingCodexRoot = Path.Combine(
+                Path.GetTempPath(),
+                "DockerCodexSuite-no-such-codex-root-" + Guid.NewGuid().ToString("N"));
+            string self = Assembly.GetExecutingAssembly().Location;
+
+            string prevWsl = SetTestEnv("DOCKER_CODEX_WSL_EXE", missingWsl);
+            string prevNode = SetTestEnv("DOCKER_CODEX_NODE_EXE", self);
+            string prevNodeOut = SetTestEnv("FAKE_NODE_VERSION_OUTPUT", "v14.17.0");
+            string prevCodex = SetTestEnv("DOCKER_CODEX_CODEX_ROOT", missingCodexRoot);
+            try
+            {
+                PrerequisiteStatus wsl = PrerequisiteDetector.DetectWsl();
+                AssertTrue(wsl.State == PrerequisiteState.Missing, "missing wsl is reported missing");
+                PrerequisiteStatus node = PrerequisiteDetector.DetectNode();
+                AssertTrue(node.State == PrerequisiteState.Missing, "low node version is reported missing");
+                PrerequisiteStatus codex = PrerequisiteDetector.DetectCodex();
+                AssertTrue(codex.State == PrerequisiteState.Missing, "missing codex is reported missing");
+            }
+            finally
+            {
+                SetTestEnv("DOCKER_CODEX_WSL_EXE", prevWsl);
+                SetTestEnv("DOCKER_CODEX_NODE_EXE", prevNode);
+                SetTestEnv("FAKE_NODE_VERSION_OUTPUT", prevNodeOut);
+                SetTestEnv("DOCKER_CODEX_CODEX_ROOT", prevCodex);
+            }
+        }
+
+        private static void TestWingetDetection()
+        {
+            string prevWinget = SetTestEnv("DOCKER_CODEX_WINGET_EXE", Assembly.GetExecutingAssembly().Location);
+            string prevNodeOut = SetTestEnv("FAKE_NODE_VERSION_OUTPUT", null);
+            try
+            {
+                string version = "";
+                AssertTrue(PrerequisiteDetector.WingetAvailable(out version), "fake winget is detected");
+                AssertTrue(version.Contains("1.8"), "winget version text is parsed");
+            }
+            finally
+            {
+                SetTestEnv("DOCKER_CODEX_WINGET_EXE", prevWinget);
+                SetTestEnv("FAKE_NODE_VERSION_OUTPUT", prevNodeOut);
+            }
+        }
+
+        private static void TestPrerequisiteInstallOneSkipsInstalled()
+        {
+            PrerequisiteStatus installed = new PrerequisiteStatus
+            {
+                Id = "wsl",
+                Name = "WSL2 + Ubuntu-24.04",
+                State = PrerequisiteState.Installed,
+                Detail = "ready"
+            };
+            int reportCount = 0;
+            PrerequisiteStatus result = PrerequisiteInstaller.InstallOne(
+                installed,
+                delegate(string id, string message, int percent)
+                {
+                    reportCount += 1;
+                });
+            AssertTrue(result.State == PrerequisiteState.Installed, "installed prerequisite is not reinstalled");
+            AssertTrue(reportCount == 1, "install-one reports exactly once for installed item");
+
+            PrerequisiteStatus unknown = new PrerequisiteStatus
+            {
+                Id = "nope",
+                Name = "Unknown",
+                State = PrerequisiteState.Missing,
+                Detail = ""
+            };
+            PrerequisiteStatus failed = PrerequisiteInstaller.InstallOne(unknown, delegate { });
+            AssertTrue(failed.State == PrerequisiteState.Failed, "unknown prerequisite fails instead of crashing");
+        }
+
+        private static void TestCurrentMachinePrerequisites()
+        {
+            List<PrerequisiteStatus> statuses = PrerequisiteDetector.DetectAll();
+            foreach (PrerequisiteStatus status in statuses)
+            {
+                AssertTrue(
+                    status.State == PrerequisiteState.Installed,
+                    "real machine prerequisite must be ready: " + status.Id + " detail=" + status.Detail);
             }
         }
 
