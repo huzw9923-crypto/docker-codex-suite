@@ -17,6 +17,16 @@ $DocsSource = Join-Path $Root "docs"
 $InstallerSource = Join-Path $Root "installer\Installer.cs"
 $AppManifest = Join-Path $Root "installer\app.manifest"
 $Csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+$CscFullReferences = @(
+  "/reference:System.dll",
+  "/reference:System.Core.dll",
+  "/reference:System.Windows.Forms.dll",
+  "/reference:System.Drawing.dll",
+  "/reference:System.IO.Compression.dll",
+  "/reference:System.IO.Compression.FileSystem.dll",
+  "/reference:System.Web.Extensions.dll",
+  "/reference:Microsoft.CSharp.dll"
+)
 $BundledNode = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
 $SetupName = "DockerCodexSuite-Setup-$Version-win-x64.exe"
 $SetupPath = Join-Path $OutputDir $SetupName
@@ -214,6 +224,10 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
   throw "Bridge menu injection tests failed with exit code $LASTEXITCODE."
 }
+& $Node (Join-Path $Root "tests\provider-doctor-tests.js")
+if ($LASTEXITCODE -ne 0) {
+  throw "Provider doctor tests failed with exit code $LASTEXITCODE."
+}
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "tests\profile-manager-tests.ps1")
 if ($LASTEXITCODE -ne 0) {
   throw "Profile manager tests failed with exit code $LASTEXITCODE."
@@ -233,25 +247,19 @@ if (-not $SkipSmokeTest) {
 New-Item -ItemType Directory -Path $BuildRoot -Force | Out-Null
 Write-Host "[2/8] Running installer and custom-path regression tests..."
 $DetectorTestOutput = Join-Path $BuildRoot "EnvironmentDetectorTests.exe"
-Invoke-Csc @(
+$detectorArgs = @(
   "/nologo",
   "/target:exe",
   "/platform:x64",
   "/codepage:65001",
   "/optimize+",
   "/main:DockerCodexSuiteInstaller.EnvironmentDetectorTests",
-  "/out:$DetectorTestOutput",
-  "/reference:System.dll",
-  "/reference:System.Core.dll",
-  "/reference:System.Windows.Forms.dll",
-  "/reference:System.Drawing.dll",
-  "/reference:System.IO.Compression.dll",
-  "/reference:System.IO.Compression.FileSystem.dll",
-  "/reference:System.Web.Extensions.dll",
-  "/reference:Microsoft.CSharp.dll",
+  "/out:$DetectorTestOutput"
+) + $CscFullReferences + @(
   (Join-Path $Root "installer\Installer.cs"),
   (Join-Path $Root "tests\EnvironmentDetectorTests.cs")
 )
+Invoke-Csc @detectorArgs
 $DetectorTestData = Join-Path $BuildRoot "environment-detector-test-data"
 & $DetectorTestOutput $DetectorTestData
 if ($LASTEXITCODE -ne 0) {
@@ -339,7 +347,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 )
 
 Write-Host "[7/8] Compiling single-file setup..."
-Invoke-Csc @(
+$setupArgs = @(
   "/nologo",
   "/target:winexe",
   "/platform:x64",
@@ -348,17 +356,11 @@ Invoke-Csc @(
   "/win32icon:$IconIco",
   "/win32manifest:$AppManifest",
   "/out:$SetupPath",
-  "/resource:$PayloadZip,DockerCodex.Payload",
-  "/reference:System.dll",
-  "/reference:System.Core.dll",
-  "/reference:System.Windows.Forms.dll",
-  "/reference:System.Drawing.dll",
-  "/reference:System.IO.Compression.dll",
-  "/reference:System.IO.Compression.FileSystem.dll",
-  "/reference:System.Web.Extensions.dll",
-  "/reference:Microsoft.CSharp.dll",
+  "/resource:$PayloadZip,DockerCodex.Payload"
+) + $CscFullReferences + @(
   $InstallerSource
 )
+Invoke-Csc @setupArgs
 
 Write-Host "[8/8] Creating manifest and smoke test..."
 $hash = Get-FileHash -LiteralPath $SetupPath -Algorithm SHA256

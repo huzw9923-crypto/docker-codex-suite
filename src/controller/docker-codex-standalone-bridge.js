@@ -491,10 +491,10 @@ function installMenu(commandMarker, version, session) {
   menuRow.appendChild(trigger);
   document.body.appendChild(panel);
 
-    const state = {
-      version,
-      session,
-      disposed: false,
+  const state = {
+    version,
+    session,
+    disposed: false,
     placement: "menu-bar",
     trigger,
     dispose() {
