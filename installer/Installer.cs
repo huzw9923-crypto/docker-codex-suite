@@ -1425,6 +1425,71 @@ namespace DockerCodexSuiteInstaller
             };
         }
 
+        private static string RunWslList()
+        {
+            string wsl = ResolveWslExecutable();
+            if (!File.Exists(wsl)) return "";
+            try
+            {
+                ProcessStartInfo info = new ProcessStartInfo();
+                info.FileName = wsl;
+                info.Arguments = "-l -v";
+                info.UseShellExecute = false;
+                info.CreateNoWindow = true;
+                info.RedirectStandardOutput = true;
+                info.RedirectStandardError = true;
+                info.StandardOutputEncoding = Encoding.UTF8;
+                info.StandardErrorEncoding = Encoding.UTF8;
+                // wsl.exe 默认在某些控制台上下文中输出 UTF-16LE；显式要求 UTF-8
+                info.EnvironmentVariables["WSL_UTF8"] = "1";
+
+                using (Process process = new Process())
+                {
+                    process.StartInfo = info;
+                    process.Start();
+                    byte[] bytes;
+                    using (MemoryStream stream = new MemoryStream())
+                    {
+                        process.StandardOutput.BaseStream.CopyTo(stream);
+                        bytes = stream.ToArray();
+                    }
+                    if (!process.WaitForExit(8000))
+                    {
+                        try { process.Kill(); }
+                        catch { }
+                        return "";
+                    }
+                    if (process.ExitCode != 0) return "";
+                    return DecodeFlexibleText(bytes);
+                }
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static string DecodeFlexibleText(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0) return "";
+            if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+            {
+                return Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2);
+            }
+
+            int zeroCount = 0;
+            int sample = Math.Min(bytes.Length, 64);
+            for (int index = 1; index < sample; index += 2)
+            {
+                if (bytes[index] == 0) zeroCount += 1;
+            }
+            if (sample >= 8 && zeroCount * 2 >= sample / 2)
+            {
+                return Encoding.Unicode.GetString(bytes);
+            }
+            return Encoding.UTF8.GetString(bytes);
+        }
+
         internal static PrerequisiteStatus DetectWsl()
         {
             string wsl = ResolveWslExecutable();
@@ -1433,17 +1498,15 @@ namespace DockerCodexSuiteInstaller
                 return Status("wsl", "WSL2 + Ubuntu-24.04", false, "未检测到 wsl.exe，需要通过 Windows 功能启用");
             }
 
-            int exitCode;
-            bool timedOut;
-            string output = RunTool(wsl, "-l -v", 8000, out exitCode, out timedOut);
-            if (timedOut || exitCode != 0)
+            string output = RunWslList();
+            if (string.IsNullOrWhiteSpace(output))
             {
                 return Status("wsl", "WSL2 + Ubuntu-24.04", false, "已安装 WSL，但还没有可用的 Ubuntu-24.04 发行版");
             }
 
             bool hasDistro = false;
             bool version2 = false;
-            string[] lines = (output ?? "").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            string[] lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
             foreach (string line in lines)
             {
                 if (line.IndexOf("Ubuntu-24.04", StringComparison.OrdinalIgnoreCase) >= 0)

@@ -523,15 +523,13 @@ namespace DockerCodexSuiteInstaller
 
         private static void TestPrerequisiteDetectMissing()
         {
-            string missingWsl = Path.Combine(
-                Path.GetTempPath(),
-                "DockerCodexSuite-no-such-wsl-" + Guid.NewGuid().ToString("N") + ".exe");
             string missingCodexRoot = Path.Combine(
                 Path.GetTempPath(),
                 "DockerCodexSuite-no-such-codex-root-" + Guid.NewGuid().ToString("N"));
             string self = Assembly.GetExecutingAssembly().Location;
 
-            string prevWsl = SetTestEnv("DOCKER_CODEX_WSL_EXE", missingWsl);
+            string prevWsl = SetTestEnv("DOCKER_CODEX_WSL_EXE", self);
+            string prevWslState = SetTestEnv("FAKE_WSL_STATE", "missing");
             string prevNode = SetTestEnv("DOCKER_CODEX_NODE_EXE", self);
             string prevNodeOut = SetTestEnv("FAKE_NODE_VERSION_OUTPUT", "v14.17.0");
             string prevCodex = SetTestEnv("DOCKER_CODEX_CODEX_ROOT", missingCodexRoot);
@@ -547,6 +545,7 @@ namespace DockerCodexSuiteInstaller
             finally
             {
                 SetTestEnv("DOCKER_CODEX_WSL_EXE", prevWsl);
+                SetTestEnv("FAKE_WSL_STATE", prevWslState);
                 SetTestEnv("DOCKER_CODEX_NODE_EXE", prevNode);
                 SetTestEnv("FAKE_NODE_VERSION_OUTPUT", prevNodeOut);
                 SetTestEnv("DOCKER_CODEX_CODEX_ROOT", prevCodex);
