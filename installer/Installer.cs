@@ -24,7 +24,7 @@ using Microsoft.Win32;
 [assembly: AssemblyCopyright("Copyright (c) 2026 Docker Codex Suite contributors")]
 [assembly: AssemblyVersion("1.0.0.1")]
 [assembly: AssemblyFileVersion("1.0.0.1")]
-[assembly: AssemblyInformationalVersion("1.0.0.beta1")]
+[assembly: AssemblyInformationalVersion("1.1.11")]
 [assembly: ComVisible(false)]
 
 namespace DockerCodexSuiteInstaller
@@ -32,7 +32,7 @@ namespace DockerCodexSuiteInstaller
     internal static class Program
     {
         internal const string ProductName = "Docker Codex Suite";
-        internal const string ProductVersion = "1.0.0.beta1";
+        internal const string ProductVersion = "1.1.11";
 
         [STAThread]
         private static int Main(string[] args)

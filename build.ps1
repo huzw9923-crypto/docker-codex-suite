@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "1.0.0.beta1",
+  [string]$Version = "1.1.11",
   [switch]$SkipSmokeTest
 )
 
@@ -204,15 +204,16 @@ if (-not (Select-String -LiteralPath $InstallerSource -Pattern $installerVersion
 
 Write-Host "[1/8] Running Chat proxy regression tests..."
 $Node = Resolve-NodeRuntime
+Push-Location $Root
 & $Node (Join-Path $Root "tests\chat-proxy-tests.js")
 if ($LASTEXITCODE -ne 0) {
   throw "Chat proxy tests failed with exit code $LASTEXITCODE."
 }
-& $Node --test (Join-Path $Root "tests\chat-proxy-tool-search-tests.js")
+& $Node --test "tests\chat-proxy-tool-search-tests.js"
 if ($LASTEXITCODE -ne 0) {
   throw "Chat proxy tool_search tests failed with exit code $LASTEXITCODE."
 }
-& $Node --test (Join-Path $Root "tests\responses-proxy-tests.js")
+& $Node --test "tests\responses-proxy-tests.js"
 if ($LASTEXITCODE -ne 0) {
   throw "Responses proxy tests failed with exit code $LASTEXITCODE."
 }
@@ -243,6 +244,7 @@ if (-not $SkipSmokeTest) {
     throw "Provider manager UI smoke test failed with exit code $LASTEXITCODE."
   }
 }
+Pop-Location
 
 New-Item -ItemType Directory -Path $BuildRoot -Force | Out-Null
 Write-Host "[2/8] Running installer and custom-path regression tests..."
@@ -259,7 +261,7 @@ $detectorArgs = @(
   (Join-Path $Root "installer\Installer.cs"),
   (Join-Path $Root "tests\EnvironmentDetectorTests.cs")
 )
-Invoke-Csc @detectorArgs
+Invoke-Csc -Arguments $detectorArgs
 $DetectorTestData = Join-Path $BuildRoot "environment-detector-test-data"
 & $DetectorTestOutput $DetectorTestData
 if ($LASTEXITCODE -ne 0) {
@@ -360,7 +362,7 @@ $setupArgs = @(
 ) + $CscFullReferences + @(
   $InstallerSource
 )
-Invoke-Csc @setupArgs
+Invoke-Csc -Arguments $setupArgs
 
 Write-Host "[8/8] Creating manifest and smoke test..."
 $hash = Get-FileHash -LiteralPath $SetupPath -Algorithm SHA256

@@ -1,12 +1,12 @@
-## Unreleased
+# Docker Codex Suite 1.1.11
 
-### 原生重启可靠性
+## 原生重启可靠性
 
 - API 切换写入容器配置后，重连助手对 app-server 的自愈重启窗口做退避重试，不再把瞬态的 `AppServerTransportConnectError: socket hang up` 当成致命错误。
 - 重试耗尽后降级为可用性失败，切换器自动走"docker restart → 等待 SSH → 原生重连"回退链，不再中断整个切换。
 - `app-reconnect-tests.js`、`bridge-menu-tests.js`、`provider-doctor-tests.js` 全部纳入构建前置回归门禁。
 
-### 英文界面菜单注入
+## 英文界面菜单注入
 
 - `Docker API` 菜单注入脚本同时支持中文（文件/编辑/视图/帮助）与英文（File/Edit/View/Help）菜单栏；Codex Desktop 使用英文界面时注入不再停留在 waiting。
 - 新增 bridge 菜单注入回归测试，覆盖中英文与异常菜单结构场景。
