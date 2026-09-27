@@ -1,4 +1,4 @@
-# Docker Codex Suite 1.2.0
+# Docker Codex Suite 1.3.0
 
 一个非官方的 Windows + Docker Codex 本地开发方案。
 
@@ -27,7 +27,7 @@
 
 ## 使用
 
-1. 运行 `DockerCodexSuite-Setup-1.2.0-win-x64.exe`。首次安装可自定义目录；检测到已有版本时，升级目录会固定为原安装目录。
+1. 运行 `DockerCodexSuite-Setup-1.3.0-win-x64.exe`。首次安装可自定义目录；检测到已有版本时，升级目录会固定为原安装目录。
 2. 确认自动检测出的 Docker 方案目录、工作区、容器状态和 SSH 端口。
 3. 安装完成后，从开始菜单打开 `Docker Codex Suite`。
 4. 在顶部 `Docker API` 菜单中新建、导入或切换 API 配置。

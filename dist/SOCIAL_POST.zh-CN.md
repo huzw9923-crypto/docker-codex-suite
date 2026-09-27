@@ -19,7 +19,7 @@
 
 前置条件：Windows 10/11 x64、Docker Desktop、Codex Desktop、Windows OpenSSH Client。
 
-下载：`DockerCodexSuite-Setup-1.2.0-win-x64.exe`
+下载：`DockerCodexSuite-Setup-1.3.0-win-x64.exe`
 
 校验值见同目录 `SHA256SUMS.txt`。
 

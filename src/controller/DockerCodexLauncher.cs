@@ -11,7 +11,7 @@ using System.Windows.Forms;
 [assembly: AssemblyCopyright("Copyright (c) 2026 Docker Codex Suite contributors")]
 [assembly: AssemblyVersion("1.0.0.1")]
 [assembly: AssemblyFileVersion("1.0.0.1")]
-[assembly: AssemblyInformationalVersion("1.2.0")]
+[assembly: AssemblyInformationalVersion("1.3.0")]
 
 namespace DockerCodexSuite
 {

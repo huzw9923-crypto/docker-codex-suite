@@ -42,7 +42,7 @@ const HEALTH_PORT = Math.max(1, Number(settings.bridgePort) || 38118);
 const CHAT_PROXY_PORT = Math.max(1, Number(settings.chatProxyPort) || 38119);
 const DEBUG_PORT = Math.max(1, Number(settings.debugPort) || 9229);
 const DEBUG_URL = process.env.CODEX_DEBUG_URL || `http://127.0.0.1:${DEBUG_PORT}`;
-const MENU_VERSION = "1.2.0";
+const MENU_VERSION = "1.3.0";
 const COMMAND_MARKER = "__DOCKER_CODEX_STANDALONE_ACTION__";
 const BRIDGE_SESSION = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const PROTOCOL_SCRIPT = path.join(BASE_DIR, "docker-codex-api-switch-protocol.ps1");
@@ -66,6 +66,7 @@ const ACTION_URIS = {
   reconnect: "docker-codex-switch://reconnect",
   host: "docker-codex-switch://use-host",
   docker: "docker-codex-switch://use-docker",
+  update: "docker-codex-switch://check-update",
 };
 
 const runtime = {
@@ -415,6 +416,7 @@ function installMenu(commandMarker, version, session) {
     ["立即重连 Docker Codex", "reconnect"],
     ["切换为主空间 API", "host"],
     ["切换为 Docker API", "docker"],
+    ["检查更新", "update"],
   ];
   const dispatchAction = (action) => {
     closeMenu();

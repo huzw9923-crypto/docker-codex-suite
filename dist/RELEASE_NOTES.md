@@ -1,3 +1,11 @@
+# Docker Codex Suite 1.3.0
+
+## 检查更新
+
+- `Docker API` 菜单新增「检查更新」：对比 GitHub Release 最新版本与本机 Suite 版本，并读取容器内 Codex CLI 版本与官方最新版本。
+- Suite 检测到新版可一键下载并静默升级（一次管理员确认）；Codex CLI 支持容器内一键更新（官方安装脚本），完成后自动重启远端 app-server 并重连。
+- 状态窗口新增"版本与更新"区块；网络请求全部带超时与容错，失败给出明确中文提示。
+
 # Docker Codex Suite 1.2.0
 
 ## 前置条件自动安装

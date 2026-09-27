@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "1.2.0",
+  [string]$Version = "1.3.0",
   [switch]$SkipSmokeTest
 )
 
@@ -238,6 +238,10 @@ if ($LASTEXITCODE -ne 0) {
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "tests\profile-manager-tests.ps1")
 if ($LASTEXITCODE -ne 0) {
   throw "Profile manager tests failed with exit code $LASTEXITCODE."
+}
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "tests\update-check-tests.ps1")
+if ($LASTEXITCODE -ne 0) {
+  throw "Update check tests failed with exit code $LASTEXITCODE."
 }
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "tests\protocol-path-tests.ps1")
 if ($LASTEXITCODE -ne 0) {

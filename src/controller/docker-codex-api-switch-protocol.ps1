@@ -153,6 +153,8 @@ function Resolve-Invocation {
     "reconnect" { $result.Action = "Reconnect" }
     "status" { $result.Action = "Status" }
     "capture-docker" { $result.Action = "CaptureDocker" }
+    "check-update" { $result.Action = "CheckUpdate" }
+    "update" { $result.Action = "CheckUpdate" }
   }
 
   $query = Get-QueryMap $parsed.Query

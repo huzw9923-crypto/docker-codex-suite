@@ -34,7 +34,7 @@
 前置：Windows 10/11 x64、.NET Framework 4.x（`csc.exe`）、Node.js 22+（或已启动过 Codex Desktop）、Docker Desktop。
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Version 1.2.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Version 1.3.0
 ```
 
 - `-Version` 必须与 `installer/Installer.cs` 中 `ProductVersion` 一致，否则构建直接失败

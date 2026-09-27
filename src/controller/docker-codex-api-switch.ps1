@@ -1,5 +1,5 @@
 ﻿param(
-  [ValidateSet("Gui", "Status", "StatusGui", "Profiles", "UseHost", "UseDocker", "CaptureDocker", "Reconnect", "RepairProfile")]
+  [ValidateSet("Gui", "Status", "StatusGui", "Profiles", "UseHost", "UseDocker", "CaptureDocker", "Reconnect", "RepairProfile", "CheckUpdate", "UpdateSuite", "UpdateCli")]
   [string]$Action = "Gui",
   [Alias("SkipRestart")]
   [switch]$SkipRecreate
@@ -1915,6 +1915,10 @@ function Format-StatusText {
     "  重连结果：$reconnectStatusLabel"
     "  重启耗时：$($status.RestartDurationMs) ms"
     ""
+    "版本与更新"
+    "  Suite 当前版本：$(Get-DisplayValue (Get-SuiteSetting -Name 'version' -Fallback ''))"
+    "  运行「检查更新」可对比 GitHub 最新版与容器内 Codex CLI 版本"
+    ""
     "模型配置"
     "  Docker 模型：$(Get-DisplayValue $status.CurrentModel)"
     "  Docker Provider：$(Get-DisplayValue $status.CurrentProvider)"
@@ -1941,6 +1945,94 @@ function Format-StatusText {
     "  主空间配置：$($status.HostConfigPath)"
     "  主空间 auth：$($status.HostAuthPath)"
   ) -join "`r`n"
+}
+
+function Invoke-CheckUpdateFlow {
+  $updateScript = Join-Path $Script:InstallDir "docker-codex-update.ps1"
+  Add-Type -AssemblyName System.Windows.Forms
+
+  if (-not (Test-Path -LiteralPath $updateScript)) {
+    Show-Message -Text "更新检查组件缺失，请重新安装 Docker Codex Suite。" -Title "检查更新"
+    return
+  }
+
+  $result = $null
+  try {
+    $raw = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updateScript -Action Check 2>$null
+    $result = ($raw | Out-String) | ConvertFrom-Json
+  }
+  catch {
+    Show-Message -Text ("检查更新失败：`r`n" + (Protect-SensitiveText $_.Exception.Message)) -Title "检查更新"
+    return
+  }
+
+  if ($null -eq $result -or -not [string]::IsNullOrWhiteSpace([string]$result.error)) {
+    $detail = if ($null -eq $result) { "没有返回结果" } else { [string]$result.error }
+    Show-Message -Text ("检查更新失败：`r`n" + (Protect-SensitiveText $detail)) -Title "检查更新"
+    return
+  }
+
+  $suiteLine = if ($result.SuiteUpdateAvailable) {
+    "  Suite：当前 $($result.SuiteCurrent) -> 最新 $($result.SuiteLatest)（可升级）"
+  }
+  else {
+    "  Suite：$($result.SuiteCurrent)（已是最新）"
+  }
+  $cliLine = if ($result.CliUpdateAvailable) {
+    "  Codex CLI：当前 $($result.CliCurrent) -> 最新 $($result.CliLatest)（可升级）"
+  }
+  else {
+    "  Codex CLI：$($result.CliCurrent)（已是最新）"
+  }
+
+  Show-Message -Text ("版本与更新`r`n`r`n" + $suiteLine + "`r`n" + $cliLine) -Title "检查更新"
+
+  if ($result.SuiteUpdateAvailable) {
+    $suiteChoice = [System.Windows.Forms.MessageBox]::Show(
+      "检测到 Suite 新版本 $($result.SuiteLatest)。是否下载并静默升级？（需要一次管理员确认）",
+      "Suite 更新",
+      [System.Windows.Forms.MessageBoxButtons]::YesNo,
+      [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($suiteChoice -eq [System.Windows.Forms.DialogResult]::Yes) {
+      $null = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updateScript -Action UpdateSuite 2>&1
+    }
+  }
+
+  if ($result.CliUpdateAvailable) {
+    $cliChoice = [System.Windows.Forms.MessageBox]::Show(
+      "检测到容器内 Codex CLI 新版本 $($result.CliLatest)（当前 $($result.CliCurrent)）。是否一键更新？`r`n更新完成后会自动重启远端 app-server 并重连。",
+      "Codex CLI 更新",
+      [System.Windows.Forms.MessageBoxButtons]::YesNo,
+      [System.Windows.Forms.MessageBoxIcon]::Question)
+    if ($cliChoice -eq [System.Windows.Forms.DialogResult]::Yes) {
+      $updateOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updateScript -Action UpdateCli 2>&1
+      $updateText = (Protect-SensitiveText ($updateOutput | Out-String))
+      if ($LASTEXITCODE -eq 0) {
+        try {
+          Reconnect-DockerCodex
+          [void][System.Windows.Forms.MessageBox]::Show(
+            "容器内 Codex CLI 已更新并完成重连。`r`n`r`n" + $updateText,
+            "Codex CLI 更新",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Information)
+        }
+        catch {
+          [void][System.Windows.Forms.MessageBox]::Show(
+            "Codex CLI 已更新，但自动重连未完成：`r`n" + (Protect-SensitiveText $_.Exception.Message),
+            "Codex CLI 更新",
+            [System.Windows.Forms.MessageBoxButtons]::OK,
+            [System.Windows.Forms.MessageBoxIcon]::Warning)
+        }
+      }
+      else {
+        [void][System.Windows.Forms.MessageBox]::Show(
+          "容器内 Codex CLI 更新未完成：`r`n`r`n" + $updateText,
+          "Codex CLI 更新",
+          [System.Windows.Forms.MessageBoxButtons]::OK,
+          [System.Windows.Forms.MessageBoxIcon]::Warning)
+      }
+    }
+  }
 }
 
 function Get-DisplayValue {
@@ -3772,6 +3864,13 @@ function Show-Gui {
   $openDirButton.Size = New-Object System.Drawing.Size($commandButtonWidth, $commandButtonHeight)
   $commandPanel.Controls.Add($openDirButton)
 
+  $updateCheckButton = New-Object DockerCodexSuiteTheme.CodexButton
+  $updateCheckButton.Text = "检查更新"
+  $updateCheckButton.Tag = "secondary"
+  $updateCheckButton.Location = New-Object System.Drawing.Point(($commandButtonLeft + (2 * $commandButtonStep)), $commandButtonRowTop)
+  $updateCheckButton.Size = New-Object System.Drawing.Size($commandButtonWidth, $commandButtonHeight)
+  $commandPanel.Controls.Add($updateCheckButton)
+
   $refreshStatus = {
     $status = Get-StatusObject
     $statusText = Format-StatusText -Status $status -Compact
@@ -4027,6 +4126,10 @@ function Show-Gui {
       Start-Process explorer.exe $Script:ComposeDir
     })
 
+  $updateCheckButton.Add_Click({
+      Invoke-CheckUpdateFlow
+    })
+
   $applyTheme = {
     param($nextTheme)
     $theme = $nextTheme
@@ -4135,6 +4238,23 @@ switch ($Action) {
   }
   "RepairProfile" {
     Repair-ActiveApiProfile | ConvertTo-Json -Depth 4
+  }
+  "CheckUpdate" {
+    Invoke-CheckUpdateFlow
+  }
+  "UpdateSuite" {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Script:InstallDir "docker-codex-update.ps1") -Action UpdateSuite
+  }
+  "UpdateCli" {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Script:InstallDir "docker-codex-update.ps1") -Action UpdateCli
+    if ($LASTEXITCODE -eq 0) {
+      try {
+        Reconnect-DockerCodex
+      }
+      catch {
+        Write-SuiteLog -Area "cli-update" -Message ("reconnect after cli update failed: " + $_.Exception.Message)
+      }
+    }
   }
   "Gui" {
     try {
